@@ -376,8 +376,17 @@ def parse_survey_file(uploaded_file):
             # Handle question-specific fields
             if question['type'] in ['multiple_choice', 'multiple_choice_single_select', 'multiple_choice_multi_select']:
                 options = row.get('Options', '')
-                if pd.notna(options):
-                    question['options'] = [opt.strip() for opt in str(options).split(',')]
+                if pd.notna(options) and str(options).strip():
+                    # Try different separators: comma, pipe, semicolon
+                    options_str = str(options)
+                    if '|' in options_str:
+                        question['options'] = [opt.strip() for opt in options_str.split('|') if opt.strip()]
+                    elif ';' in options_str:
+                        question['options'] = [opt.strip() for opt in options_str.split(';') if opt.strip()]
+                    else:
+                        question['options'] = [opt.strip() for opt in options_str.split(',') if opt.strip()]
+                else:
+                    question['options'] = []
             
             elif question['type'] == 'rating':
                 question['minRating'] = int(row.get('MinRating', 1))
@@ -386,10 +395,23 @@ def parse_survey_file(uploaded_file):
             elif question['type'] == 'matrix':
                 matrix_rows = row.get('MatrixRows', '')
                 matrix_cols = row.get('MatrixCols', '')
-                if pd.notna(matrix_rows):
-                    question['matrixRows'] = [r.strip() for r in str(matrix_rows).split(',')]
-                if pd.notna(matrix_cols):
-                    question['matrixCols'] = [c.strip() for c in str(matrix_cols).split(',')]
+                if pd.notna(matrix_rows) and str(matrix_rows).strip():
+                    rows_str = str(matrix_rows)
+                    if '|' in rows_str:
+                        question['matrixRows'] = [r.strip() for r in rows_str.split('|') if r.strip()]
+                    else:
+                        question['matrixRows'] = [r.strip() for r in rows_str.split(',') if r.strip()]
+                else:
+                    question['matrixRows'] = []
+                    
+                if pd.notna(matrix_cols) and str(matrix_cols).strip():
+                    cols_str = str(matrix_cols)
+                    if '|' in cols_str:
+                        question['matrixCols'] = [c.strip() for c in cols_str.split('|') if c.strip()]
+                    else:
+                        question['matrixCols'] = [c.strip() for c in cols_str.split(',') if c.strip()]
+                else:
+                    question['matrixCols'] = []
             
             # Handle dependencies
             if pd.notna(row.get('DependsOn')):
@@ -439,6 +461,9 @@ def render_question(question: Dict, key_prefix: str = ""):
     
     # Get existing value from session state
     existing_value = st.session_state.survey_responses.get(q_id, "")
+    
+    # Debug: Show question type and options (temporary)
+    # st.caption(f"Debug - Type: {q_type}, Options: {question.get('options', 'N/A')}")
     
     if q_type == 'text':
         return st.text_input(label, value=existing_value, key=key)
