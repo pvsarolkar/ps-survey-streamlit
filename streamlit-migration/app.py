@@ -493,9 +493,15 @@ def render_question(question: Dict, key_prefix: str = ""):
         matrix_rows = question.get('matrixRows', [])
         matrix_cols = question.get('matrixCols', [])
         
+        # Debug: Show if matrix data is missing
+        if not matrix_rows or not matrix_cols:
+            st.warning(f"⚠️ Matrix question missing data. Rows: {len(matrix_rows)}, Cols: {len(matrix_cols)}")
+            st.caption(f"Debug - Rows: {matrix_rows}, Cols: {matrix_cols}")
+            return ""
+        
         matrix_responses = {}
         for row in matrix_rows:
-            row_key = f"{key}_{row}"
+            row_key = f"{key}_{row.replace(' ', '_').replace('|', '_')}"  # Sanitize key
             existing_row_value = ""
             if existing_value:
                 try:
