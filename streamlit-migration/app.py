@@ -513,65 +513,38 @@ def render_question(question: Dict, key_prefix: str = ""):
         # Create a container for better styling
         st.markdown("---")
         
-        # Add custom CSS for clean table styling with proper borders
+        # Add custom CSS to hide radio button text and style the matrix
         st.markdown("""
         <style>
-        .matrix-container {
+        /* Hide the radio button labels since we have headers */
+        div[data-testid="stRadio"] label[data-baseweb="radio"] > div:last-child {
+            display: none !important;
+        }
+        /* Style the matrix container */
+        .matrix-table-container {
             border: 1px solid #e0e0e0;
             border-radius: 4px;
-            overflow: hidden;
             margin: 10px 0;
-        }
-        .matrix-row {
-            display: flex;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        .matrix-row:last-child {
-            border-bottom: none;
-        }
-        .matrix-cell-aspect {
-            flex: 0 0 25%;
-            padding: 12px;
-            border-right: 1px solid #e0e0e0;
-            background-color: #fafafa;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-        }
-        .matrix-cell-options {
-            flex: 1;
-            padding: 8px 12px;
-            display: flex;
-            align-items: center;
-        }
-        .matrix-header-row {
-            display: flex;
-            background-color: #f8f9fa;
-            border-bottom: 2px solid #d0d0d0;
-            font-weight: bold;
-        }
-        .matrix-header-aspect {
-            flex: 0 0 25%;
-            padding: 12px;
-            border-right: 1px solid #e0e0e0;
-        }
-        .matrix-header-options {
-            flex: 1;
-            padding: 12px;
-            text-align: center;
         }
         </style>
         """, unsafe_allow_html=True)
         
-        # Create container
-        st.markdown('<div class="matrix-container">', unsafe_allow_html=True)
+        # Create a clean table structure
+        st.markdown('<div class="matrix-table-container">', unsafe_allow_html=True)
+        
+        # Calculate column widths to match radio button spacing
+        # First column for aspect names, rest divided equally for radio buttons
+        num_options = len(matrix_cols)
+        col_widths = [2] + [1] * num_options
         
         # Header row
-        header_html = '<div class="matrix-header-row">'
-        header_html += '<div class="matrix-header-aspect">Aspect</div>'
-        header_html += '<div class="matrix-header-options">' + ' &nbsp;&nbsp;&nbsp; '.join(matrix_cols) + '</div>'
-        header_html += '</div>'
-        st.markdown(header_html, unsafe_allow_html=True)
+        header_cols = st.columns(col_widths)
+        with header_cols[0]:
+            st.markdown('<div style="padding: 12px; font-weight: bold; background-color: #f8f9fa; border-bottom: 2px solid #d0d0d0;">Aspect</div>', unsafe_allow_html=True)
+        
+        for idx, col_name in enumerate(matrix_cols):
+            with header_cols[idx + 1]:
+                st.markdown(f'<div style="padding: 12px; font-weight: bold; background-color: #f8f9fa; border-bottom: 2px solid #d0d0d0; text-align: center;">{col_name}</div>', unsafe_allow_html=True)
         
         # Data rows with radio buttons
         for row_idx, row_name in enumerate(matrix_rows):
@@ -581,36 +554,37 @@ def render_question(question: Dict, key_prefix: str = ""):
             if existing_row_value and existing_row_value in matrix_cols:
                 selected_idx = matrix_cols.index(existing_row_value)
             
-            # Create row container
-            st.markdown('<div class="matrix-row">', unsafe_allow_html=True)
-            
-            # Use columns for layout
-            row_cols = st.columns([1, 3])
+            # Create columns for this row
+            row_cols = st.columns(col_widths)
             
             # Aspect name in first column
             with row_cols[0]:
-                st.markdown(f'<div style="padding: 4px 0;">{row_name}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding: 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; min-height: 50px;">{row_name}</div>', unsafe_allow_html=True)
             
             # Create a unique key for this row's radio group
             row_key = f"{key}_{row_name.replace(' ', '_').replace('|', '_')}_{row_idx}"
             
-            # Radio buttons in second column
-            with row_cols[1]:
-                selected = st.radio(
-                    label=f"Select rating for {row_name}",
-                    options=matrix_cols,
-                    index=selected_idx,
-                    key=row_key,
-                    horizontal=True,
-                    label_visibility="collapsed"
-                )
-                
-                if selected:
-                    matrix_responses[row_name] = selected
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+            # Place each radio button in its corresponding column
+            for col_idx, col_name in enumerate(matrix_cols):
+                with row_cols[col_idx + 1]:
+                    # Create a container with border
+                    st.markdown(f'<div style="padding: 8px; border-bottom: 1px solid #e0e0e0; text-align: center; min-height: 50px; display: flex; align-items: center; justify-content: center;">', unsafe_allow_html=True)
+                    
+                    # Single radio button for this cell
+                    is_selected = (existing_row_value == col_name)
+                    cell_key = f"{row_key}_{col_idx}"
+                    
+                    if st.radio(
+                        label=col_name,
+                        options=[col_name],
+                        index=0 if is_selected else None,
+                        key=cell_key,
+                        label_visibility="collapsed"
+                    ):
+                        matrix_responses[row_name] = col_name
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
         
-        # Close container
         st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("---")
