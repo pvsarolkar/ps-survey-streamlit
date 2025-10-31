@@ -526,6 +526,16 @@ def render_question(question: Dict, key_prefix: str = ""):
             border-radius: 4px;
             margin: 10px 0;
         }
+        /* Center align radio buttons */
+        div[data-testid="stRadio"] {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        /* Reduce padding around radio buttons */
+        div[data-testid="stRadio"] > div {
+            gap: 0 !important;
+        }
         </style>
         """, unsafe_allow_html=True)
         
@@ -540,11 +550,11 @@ def render_question(question: Dict, key_prefix: str = ""):
         # Header row
         header_cols = st.columns(col_widths)
         with header_cols[0]:
-            st.markdown('<div style="padding: 12px; font-weight: bold; background-color: #f8f9fa; border-bottom: 2px solid #d0d0d0;">Aspect</div>', unsafe_allow_html=True)
+            st.markdown('<div style="padding: 8px 12px; font-weight: bold; background-color: #f8f9fa; border-bottom: 2px solid #d0d0d0;">Aspect</div>', unsafe_allow_html=True)
         
         for idx, col_name in enumerate(matrix_cols):
             with header_cols[idx + 1]:
-                st.markdown(f'<div style="padding: 12px; font-weight: bold; background-color: #f8f9fa; border-bottom: 2px solid #d0d0d0; text-align: center;">{col_name}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding: 8px; font-weight: bold; background-color: #f8f9fa; border-bottom: 2px solid #d0d0d0; text-align: center;">{col_name}</div>', unsafe_allow_html=True)
         
         # Data rows with radio buttons
         for row_idx, row_name in enumerate(matrix_rows):
@@ -559,7 +569,7 @@ def render_question(question: Dict, key_prefix: str = ""):
             
             # Aspect name in first column
             with row_cols[0]:
-                st.markdown(f'<div style="padding: 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; min-height: 50px;">{row_name}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding: 8px 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center;">{row_name}</div>', unsafe_allow_html=True)
             
             # Create a unique key for this row's radio group
             row_key = f"{key}_{row_name.replace(' ', '_').replace('|', '_')}_{row_idx}"
@@ -567,8 +577,8 @@ def render_question(question: Dict, key_prefix: str = ""):
             # Place each radio button in its corresponding column
             for col_idx, col_name in enumerate(matrix_cols):
                 with row_cols[col_idx + 1]:
-                    # Create a container with border
-                    st.markdown(f'<div style="padding: 8px; border-bottom: 1px solid #e0e0e0; text-align: center; min-height: 50px; display: flex; align-items: center; justify-content: center;">', unsafe_allow_html=True)
+                    # Create a container with border and centered content
+                    st.markdown(f'<div style="padding: 4px; border-bottom: 1px solid #e0e0e0; text-align: center; display: flex; align-items: center; justify-content: center;">', unsafe_allow_html=True)
                     
                     # Single radio button for this cell
                     is_selected = (existing_row_value == col_name)
