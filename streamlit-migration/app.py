@@ -510,40 +510,62 @@ def render_question(question: Dict, key_prefix: str = ""):
         # Create matrix table using columns
         matrix_responses = {}
         
-        # Header row with column labels
-        header_cols = st.columns([3] + [1] * len(matrix_cols))
-        header_cols[0].write("**Aspect**")
-        for idx, col_name in enumerate(matrix_cols):
-            header_cols[idx + 1].write(f"**{col_name}**")
+        # Create a container for better styling
+        st.markdown("---")
         
-        # Data rows with radio buttons
+        # Use HTML/CSS to create a clean table with radio buttons
+        # Build HTML table
+        table_html = '<table style="width:100%; border-collapse: collapse;">'
+        
+        # Header row
+        table_html += '<tr style="border-bottom: 2px solid #ddd;">'
+        table_html += '<th style="text-align:left; padding:10px; font-weight:bold;">Aspect</th>'
+        for col_name in matrix_cols:
+            table_html += f'<th style="text-align:center; padding:10px; font-weight:bold;">{col_name}</th>'
+        table_html += '</tr>'
+        
+        st.markdown(table_html, unsafe_allow_html=True)
+        
+        # Data rows - use Streamlit widgets in columns
         for row_idx, row_name in enumerate(matrix_rows):
-            row_cols = st.columns([3] + [1] * len(matrix_cols))
-            row_cols[0].write(row_name)
-            
             # Get existing value for this row
             existing_row_value = existing_matrix.get(row_name, None)
+            selected_idx = None
+            if existing_row_value and existing_row_value in matrix_cols:
+                selected_idx = matrix_cols.index(existing_row_value)
             
-            # Create radio buttons for each column
+            # Create columns with adjusted widths
+            col_widths = [2.5] + [1.2] * len(matrix_cols)
+            row_cols = st.columns(col_widths)
+            
+            # Aspect name
+            row_cols[0].markdown(f"**{row_name}**")
+            
+            # Create a unique key for this row's radio group
             row_key = f"{key}_{row_name.replace(' ', '_').replace('|', '_')}_{row_idx}"
             
-            # Radio button for this row (horizontal layout)
-            selected_col_idx = None
-            if existing_row_value and existing_row_value in matrix_cols:
-                selected_col_idx = matrix_cols.index(existing_row_value)
-            
-            # Use radio button with horizontal layout
-            selected = st.radio(
-                label=f"Select for {row_name}",
-                options=matrix_cols,
-                index=selected_col_idx if selected_col_idx is not None else None,
-                key=row_key,
-                horizontal=True,
-                label_visibility="collapsed"
-            )
-            
-            if selected:
-                matrix_responses[row_name] = selected
+            # Single radio group for the entire row - but we'll use session state to track
+            # Use individual checkboxes styled as radio buttons
+            for col_idx, col_name in enumerate(matrix_cols):
+                with row_cols[col_idx + 1]:
+                    # Use checkbox to simulate radio button behavior
+                    is_selected = (existing_row_value == col_name)
+                    
+                    # Create centered checkbox
+                    checkbox_key = f"{row_key}_{col_name}"
+                    checked = st.checkbox(
+                        label="",
+                        value=is_selected,
+                        key=checkbox_key,
+                        label_visibility="collapsed"
+                    )
+                    
+                    if checked:
+                        # Clear other selections for this row
+                        matrix_responses[row_name] = col_name
+        
+        st.markdown('</table>', unsafe_allow_html=True)
+        st.markdown("---")
         
         return json.dumps(matrix_responses) if matrix_responses else ""
     
