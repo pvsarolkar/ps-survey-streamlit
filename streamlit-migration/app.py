@@ -513,47 +513,65 @@ def render_question(question: Dict, key_prefix: str = ""):
         # Create a container for better styling
         st.markdown("---")
         
-        # Add custom CSS for clean table styling
+        # Add custom CSS for clean table styling with proper borders
         st.markdown("""
         <style>
-        .matrix-cell {
+        .matrix-container {
             border: 1px solid #e0e0e0;
-            padding: 10px;
-            text-align: center;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
         }
-        .matrix-cell-left {
-            border: 1px solid #e0e0e0;
-            padding: 10px;
-            text-align: left;
+        .matrix-row {
+            display: flex;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .matrix-row:last-child {
+            border-bottom: none;
+        }
+        .matrix-cell-aspect {
+            flex: 0 0 25%;
+            padding: 12px;
+            border-right: 1px solid #e0e0e0;
+            background-color: #fafafa;
             font-weight: 500;
+            display: flex;
+            align-items: center;
         }
-        .matrix-header {
-            border: 1px solid #e0e0e0;
-            padding: 12px 8px;
+        .matrix-cell-options {
+            flex: 1;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+        }
+        .matrix-header-row {
+            display: flex;
+            background-color: #f8f9fa;
+            border-bottom: 2px solid #d0d0d0;
+            font-weight: bold;
+        }
+        .matrix-header-aspect {
+            flex: 0 0 25%;
+            padding: 12px;
+            border-right: 1px solid #e0e0e0;
+        }
+        .matrix-header-options {
+            flex: 1;
+            padding: 12px;
             text-align: center;
-            font-weight: bold;
-            background-color: #f8f9fa;
-        }
-        .matrix-header-left {
-            border: 1px solid #e0e0e0;
-            padding: 12px 8px;
-            text-align: left;
-            font-weight: bold;
-            background-color: #f8f9fa;
         }
         </style>
         """, unsafe_allow_html=True)
         
-        # Calculate column widths: first column for aspect names, then equal width for each option
-        col_widths = [2.5] + [1.2] * len(matrix_cols)
+        # Create container
+        st.markdown('<div class="matrix-container">', unsafe_allow_html=True)
         
         # Header row
-        header_cols = st.columns(col_widths)
-        with header_cols[0]:
-            st.markdown('<div class="matrix-header-left">Aspect</div>', unsafe_allow_html=True)
-        for idx, col_name in enumerate(matrix_cols):
-            with header_cols[idx + 1]:
-                st.markdown(f'<div class="matrix-header">{col_name}</div>', unsafe_allow_html=True)
+        header_html = '<div class="matrix-header-row">'
+        header_html += '<div class="matrix-header-aspect">Aspect</div>'
+        header_html += '<div class="matrix-header-options">' + ' &nbsp;&nbsp;&nbsp; '.join(matrix_cols) + '</div>'
+        header_html += '</div>'
+        st.markdown(header_html, unsafe_allow_html=True)
         
         # Data rows with radio buttons
         for row_idx, row_name in enumerate(matrix_rows):
@@ -563,19 +581,21 @@ def render_question(question: Dict, key_prefix: str = ""):
             if existing_row_value and existing_row_value in matrix_cols:
                 selected_idx = matrix_cols.index(existing_row_value)
             
-            # Create columns for this row
-            row_cols = st.columns([2.5, 7.5])  # Two columns: aspect name and radio buttons
+            # Create row container
+            st.markdown('<div class="matrix-row">', unsafe_allow_html=True)
+            
+            # Use columns for layout
+            row_cols = st.columns([1, 3])
             
             # Aspect name in first column
             with row_cols[0]:
-                st.markdown(f'<div class="matrix-cell-left">{row_name}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding: 4px 0;">{row_name}</div>', unsafe_allow_html=True)
             
             # Create a unique key for this row's radio group
             row_key = f"{key}_{row_name.replace(' ', '_').replace('|', '_')}_{row_idx}"
             
-            # Radio buttons in second column with border styling
+            # Radio buttons in second column
             with row_cols[1]:
-                st.markdown('<div class="matrix-cell" style="padding: 5px 10px;">', unsafe_allow_html=True)
                 selected = st.radio(
                     label=f"Select rating for {row_name}",
                     options=matrix_cols,
@@ -584,10 +604,14 @@ def render_question(question: Dict, key_prefix: str = ""):
                     horizontal=True,
                     label_visibility="collapsed"
                 )
-                st.markdown('</div>', unsafe_allow_html=True)
                 
                 if selected:
                     matrix_responses[row_name] = selected
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Close container
+        st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("---")
         
