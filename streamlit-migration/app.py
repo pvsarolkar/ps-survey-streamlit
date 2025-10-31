@@ -513,20 +513,49 @@ def render_question(question: Dict, key_prefix: str = ""):
         # Create a container for better styling
         st.markdown("---")
         
-        # Use HTML/CSS to create a clean table with radio buttons
-        # Build HTML table
-        table_html = '<table style="width:100%; border-collapse: collapse;">'
+        # Add custom CSS for clean table styling
+        st.markdown("""
+        <style>
+        .matrix-cell {
+            border: 1px solid #e0e0e0;
+            padding: 10px;
+            text-align: center;
+        }
+        .matrix-cell-left {
+            border: 1px solid #e0e0e0;
+            padding: 10px;
+            text-align: left;
+            font-weight: 500;
+        }
+        .matrix-header {
+            border: 1px solid #e0e0e0;
+            padding: 12px 8px;
+            text-align: center;
+            font-weight: bold;
+            background-color: #f8f9fa;
+        }
+        .matrix-header-left {
+            border: 1px solid #e0e0e0;
+            padding: 12px 8px;
+            text-align: left;
+            font-weight: bold;
+            background-color: #f8f9fa;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Calculate column widths: first column for aspect names, then equal width for each option
+        col_widths = [2.5] + [1.2] * len(matrix_cols)
         
         # Header row
-        table_html += '<tr style="border-bottom: 2px solid #ddd;">'
-        table_html += '<th style="text-align:left; padding:10px; font-weight:bold;">Aspect</th>'
-        for col_name in matrix_cols:
-            table_html += f'<th style="text-align:center; padding:10px; font-weight:bold;">{col_name}</th>'
-        table_html += '</tr>'
+        header_cols = st.columns(col_widths)
+        with header_cols[0]:
+            st.markdown('<div class="matrix-header-left">Aspect</div>', unsafe_allow_html=True)
+        for idx, col_name in enumerate(matrix_cols):
+            with header_cols[idx + 1]:
+                st.markdown(f'<div class="matrix-header">{col_name}</div>', unsafe_allow_html=True)
         
-        st.markdown(table_html, unsafe_allow_html=True)
-        
-        # Data rows - use Streamlit widgets in columns
+        # Data rows with radio buttons
         for row_idx, row_name in enumerate(matrix_rows):
             # Get existing value for this row
             existing_row_value = existing_matrix.get(row_name, None)
@@ -534,37 +563,32 @@ def render_question(question: Dict, key_prefix: str = ""):
             if existing_row_value and existing_row_value in matrix_cols:
                 selected_idx = matrix_cols.index(existing_row_value)
             
-            # Create columns with adjusted widths
-            col_widths = [2.5] + [1.2] * len(matrix_cols)
-            row_cols = st.columns(col_widths)
+            # Create columns for this row
+            row_cols = st.columns([2.5, 7.5])  # Two columns: aspect name and radio buttons
             
-            # Aspect name
-            row_cols[0].markdown(f"**{row_name}**")
+            # Aspect name in first column
+            with row_cols[0]:
+                st.markdown(f'<div class="matrix-cell-left">{row_name}</div>', unsafe_allow_html=True)
             
             # Create a unique key for this row's radio group
             row_key = f"{key}_{row_name.replace(' ', '_').replace('|', '_')}_{row_idx}"
             
-            # Single radio group for the entire row - but we'll use session state to track
-            # Use individual checkboxes styled as radio buttons
-            for col_idx, col_name in enumerate(matrix_cols):
-                with row_cols[col_idx + 1]:
-                    # Use checkbox to simulate radio button behavior
-                    is_selected = (existing_row_value == col_name)
-                    
-                    # Create centered checkbox
-                    checkbox_key = f"{row_key}_{col_name}"
-                    checked = st.checkbox(
-                        label="",
-                        value=is_selected,
-                        key=checkbox_key,
-                        label_visibility="collapsed"
-                    )
-                    
-                    if checked:
-                        # Clear other selections for this row
-                        matrix_responses[row_name] = col_name
+            # Radio buttons in second column with border styling
+            with row_cols[1]:
+                st.markdown('<div class="matrix-cell" style="padding: 5px 10px;">', unsafe_allow_html=True)
+                selected = st.radio(
+                    label=f"Select rating for {row_name}",
+                    options=matrix_cols,
+                    index=selected_idx,
+                    key=row_key,
+                    horizontal=True,
+                    label_visibility="collapsed"
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                if selected:
+                    matrix_responses[row_name] = selected
         
-        st.markdown('</table>', unsafe_allow_html=True)
         st.markdown("---")
         
         return json.dumps(matrix_responses) if matrix_responses else ""
