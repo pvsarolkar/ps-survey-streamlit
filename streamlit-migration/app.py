@@ -73,16 +73,28 @@ st.markdown("""
 def get_db_connection():
     """Create and cache database connection"""
     try:
+        # Read secrets with proper fallback
+        db_host = st.secrets.get("DB_HOST") if "DB_HOST" in st.secrets else "localhost"
+        db_port = st.secrets.get("DB_PORT") if "DB_PORT" in st.secrets else 5432
+        db_name = st.secrets.get("DB_NAME") if "DB_NAME" in st.secrets else "postgres"
+        db_user = st.secrets.get("DB_USER") if "DB_USER" in st.secrets else "postgres"
+        db_password = st.secrets.get("DB_PASSWORD") if "DB_PASSWORD" in st.secrets else ""
+        
         conn = psycopg2.connect(
-            host=st.secrets.get("DB_HOST", "localhost"),
-            port=st.secrets.get("DB_PORT", 5432),
-            database=st.secrets.get("DB_NAME", "postgres"),
-            user=st.secrets.get("DB_USER", "postgres"),
-            password=st.secrets.get("DB_PASSWORD", "")
+            host=db_host,
+            port=db_port,
+            database=db_name,
+            user=db_user,
+            password=db_password
         )
         return conn
     except Exception as e:
         st.error(f"Database connection failed: {str(e)}")
+        # Show debug info
+        if "DB_HOST" in st.secrets:
+            st.info(f"Attempting to connect to: {st.secrets['DB_HOST']}:{st.secrets.get('DB_PORT', 5432)}")
+        else:
+            st.warning("⚠️ Database credentials not found in secrets. Please configure them in Settings → Secrets")
         return None
 
 def execute_query(query: str, params: tuple = None, fetch: bool = True):
