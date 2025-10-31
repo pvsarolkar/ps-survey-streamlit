@@ -499,21 +499,51 @@ def render_question(question: Dict, key_prefix: str = ""):
             st.caption(f"Debug - Rows: {matrix_rows}, Cols: {matrix_cols}")
             return ""
         
+        # Load existing responses
+        existing_matrix = {}
+        if existing_value:
+            try:
+                existing_matrix = json.loads(existing_value)
+            except:
+                pass
+        
+        # Create matrix table using columns
         matrix_responses = {}
-        for row in matrix_rows:
-            row_key = f"{key}_{row.replace(' ', '_').replace('|', '_')}"  # Sanitize key
-            existing_row_value = ""
-            if existing_value:
-                try:
-                    matrix_data = json.loads(existing_value)
-                    existing_row_value = matrix_data.get(row, "")
-                except:
-                    pass
+        
+        # Header row with column labels
+        header_cols = st.columns([3] + [1] * len(matrix_cols))
+        header_cols[0].write("**Aspect**")
+        for idx, col_name in enumerate(matrix_cols):
+            header_cols[idx + 1].write(f"**{col_name}**")
+        
+        # Data rows with radio buttons
+        for row_idx, row_name in enumerate(matrix_rows):
+            row_cols = st.columns([3] + [1] * len(matrix_cols))
+            row_cols[0].write(row_name)
             
-            col_index = matrix_cols.index(existing_row_value) if existing_row_value in matrix_cols else 0
-            selected = st.selectbox(f"  {row}", options=[""] + matrix_cols, index=col_index if existing_row_value else 0, key=row_key)
+            # Get existing value for this row
+            existing_row_value = existing_matrix.get(row_name, None)
+            
+            # Create radio buttons for each column
+            row_key = f"{key}_{row_name.replace(' ', '_').replace('|', '_')}_{row_idx}"
+            
+            # Radio button for this row (horizontal layout)
+            selected_col_idx = None
+            if existing_row_value and existing_row_value in matrix_cols:
+                selected_col_idx = matrix_cols.index(existing_row_value)
+            
+            # Use radio button with horizontal layout
+            selected = st.radio(
+                label=f"Select for {row_name}",
+                options=matrix_cols,
+                index=selected_col_idx if selected_col_idx is not None else None,
+                key=row_key,
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+            
             if selected:
-                matrix_responses[row] = selected
+                matrix_responses[row_name] = selected
         
         return json.dumps(matrix_responses) if matrix_responses else ""
     
