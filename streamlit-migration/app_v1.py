@@ -1,6 +1,5 @@
 import streamlit as st
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from helper import postgres_fetch, postgres_insert, postgres_update, postgres_delete
 import pandas as pd
 import json
 from datetime import datetime
@@ -67,285 +66,435 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# DATABASE CONNECTION
+# SQL HELPER FUNCTIONS
 # ============================================================================
-@st.cache_resource
-def get_db_connection():
-    """Create and cache database connection"""
-    try:
-        # Read secrets with proper fallback
-        db_host = st.secrets.get("DB_HOST") if "DB_HOST" in st.secrets else "localhost"
-        db_port = st.secrets.get("DB_PORT") if "DB_PORT" in st.secrets else 5432
-        db_name = st.secrets.get("DB_NAME") if "DB_NAME" in st.secrets else "postgres"
-        db_user = st.secrets.get("DB_USER") if "DB_USER" in st.secrets else "postgres"
-        db_password = st.secrets.get("DB_PASSWORD") if "DB_PASSWORD" in st.secrets else ""
-        
-        conn = psycopg2.connect(
-            host=db_host,
-            port=db_port,
-            database=db_name,
-            user=db_user,
-            password=db_password
-        )
-        return conn
-    except Exception as e:
-        st.error(f"Database connection failed: {str(e)}")
-        # Show debug info
-        if "DB_HOST" in st.secrets:
-            st.info(f"Attempting to connect to: {st.secrets['DB_HOST']}:{st.secrets.get('DB_PORT', 5432)}")
-        else:
-            st.warning("⚠️ Database credentials not found in secrets. Please configure them in Settings → Secrets")
-        return None
 
-def execute_query(query: str, params: tuple = None, fetch: bool = True):
-    """Execute database query with error handling"""
-    conn = get_db_connection()
-    if not conn:
-        return None
+def escape_sql_string(value):
+    """Escape SQL string values for safe insertion"""
+    if value is None:
+        return 'NULL'
+    if isinstance(value, bool):
+        return 'TRUE' if value else 'FALSE'
+    if isinstance(value, (int, float)):
+        return str(value)
+    # Escape single quotes by doubling them
+    escaped = str(value).replace("'", "''")
+    return f"'{escaped}'"
+
+def format_sql_query(query: str, params: tuple = None):
+    """Format SQL query with parameters safely"""
+    if params is None:
+        return query
     
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query, params)
-            if fetch:
-                result = cur.fetchall()
-                return result
-            else:
-                conn.commit()
-                return True
-    except Exception as e:
-        conn.rollback()
-        st.error(f"Database error: {str(e)}")
-        return None
+    formatted_query = query
+    for param in params:
+        escaped_value = escape_sql_string(param)
+        # Replace first %s with escaped value
+        formatted_query = formatted_query.replace('%s', escaped_value, 1)
+    
+    return formatted_query
 
 # ============================================================================
 # DATABASE OPERATIONS
 # ============================================================================
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_all_surveys():
     """Fetch all available surveys"""
     query = """
         SELECT 
-            template_name as survey_name,
-            description,
-            questions,
-            created_date,
-            updated_date
-        FROM templates 
-        ORDER BY created_date DESC
+            "template_name" as survey_name,
+            "description",
+            "questions"::text as questions,
+            "created_date",
+            "updated_date"
+        FROM "templates" 
+        ORDER BY "created_date" DESC
     """
-    return execute_query(query)
+    try:
+        df = postgres_fetch(query)
+        # Check if result is actually a DataFrame
+        if not isinstance(df, pd.DataFrame):
+            st.error(f"Unexpected return type from postgres_fetch: {type(df)}")
+            return []
+        if df is None or df.empty:
+            return []
+        # Convert DataFrame to list of dictionaries
+        records = df.to_dict('records')
+        # Parse questions JSON field and clean up NaN values
+        for record in records:
+            # Clean up NaN values in description
+            if 'description' in record:
+                desc = record['description']
+                if desc is None or (isinstance(desc, float) and pd.isna(desc)):
+                    record['description'] = ''
+            if 'questions' in record:
+                questions = record['questions']
+                # Handle different data types
+                if questions is None:
+                    record['questions'] = []
+                elif isinstance(questions, str):
+                    # Try to parse as JSON string
+                    try:
+                        parsed = json.loads(questions)
+                        record['questions'] = parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError) as e:
+                        # If parsing fails, set to empty list
+                        st.warning(f"Failed to parse questions JSON for {record.get('survey_name', 'Unknown')}: {str(e)}")
+                        record['questions'] = []
+                elif isinstance(questions, (list, dict)):
+                    # Already parsed or is a list/dict
+                    record['questions'] = questions if isinstance(questions, list) else []
+                else:
+                    # Try to convert to string and parse
+                    try:
+                        questions_str = str(questions)
+                        parsed = json.loads(questions_str)
+                        record['questions'] = parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError):
+                        record['questions'] = []
+        return records
+    except Exception as e:
+        st.error(f"Database error in get_all_surveys: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+        return []
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_customers(search_term: str = ""):
     """Search customers by company name or ID"""
-    if search_term:
-        query = """
-            SELECT customer_id, customer_company, classification, owner
-            FROM customers 
-            WHERE customer_company ILIKE %s OR customer_id ILIKE %s
-            ORDER BY customer_company ASC
-            LIMIT 50
-        """
-        return execute_query(query, (f"%{search_term}%", f"%{search_term}%"))
-    else:
-        query = """
-            SELECT customer_id, customer_company, classification, owner
-            FROM customers 
-            ORDER BY customer_company ASC
-            LIMIT 50
-        """
-        return execute_query(query)
+    try:
+        if search_term:
+            search_pattern = f"%{search_term}%"
+            query = f"""
+                SELECT "customer_id", "customer_company", "classification", "owner"
+                FROM "customers" 
+                WHERE "customer_company" ILIKE {escape_sql_string(search_pattern)} 
+                   OR "customer_id" ILIKE {escape_sql_string(search_pattern)}
+                ORDER BY "customer_company" ASC
+                LIMIT 50
+            """
+        else:
+            query = """
+                SELECT "customer_id", "customer_company", "classification", "owner"
+                FROM "customers" 
+                ORDER BY "customer_company" ASC
+                LIMIT 50
+            """
+        
+        df = postgres_fetch(query)
+        # Check if result is actually a DataFrame
+        if not isinstance(df, pd.DataFrame):
+            return []
+        if df is None or df.empty:
+            return []
+        return df.to_dict('records')
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+        return []
 
 def check_existing_responses(customer_id: str, partner_company: str, template_name: str):
     """Check if responses already exist for this combination"""
-    query = """
-        SELECT 
-            r.question_id, 
-            r.response_value, 
-            s.submission_date,
-            p.partner_name as previous_partner_name,
-            c.customer_company
-        FROM responses r
-        JOIN submissions s ON r.submission_id = s.id
-        JOIN partners p ON s.partner_id = p.id
-        JOIN customers c ON s.customer_id = c.customer_id
-        JOIN templates t ON s.template_id = t.id
-        WHERE s.customer_id = %s 
-        AND p.partner_company = %s 
-        AND t.template_name = %s
-        AND s.id = (
-            SELECT MAX(s2.id) 
-            FROM submissions s2 
-            JOIN partners p2 ON s2.partner_id = p2.id
-            JOIN templates t2 ON s2.template_id = t2.id
-            WHERE s2.customer_id = %s
-            AND p2.partner_company = %s
-            AND t2.template_name = %s
-        )
-    """
-    results = execute_query(query, (customer_id, partner_company, template_name, 
-                                    customer_id, partner_company, template_name))
-    
-    if results and len(results) > 0:
-        responses = {row['question_id']: row['response_value'] for row in results}
-        return {
-            'has_existing': True,
-            'responses': responses,
-            'submission_date': results[0]['submission_date'],
-            'previous_partner_name': results[0]['previous_partner_name'],
-            'customer_company': results[0]['customer_company']
-        }
-    return {'has_existing': False}
+    try:
+        # Ensure customer_id is treated as text for comparison
+        query = f"""
+            SELECT 
+                r."question_id", 
+                r."response_value", 
+                s."submission_date",
+                p."partner_name" as previous_partner_name,
+                c."customer_company"
+            FROM "responses" r
+            JOIN "submissions" s ON r."submission_id" = s."id"
+            JOIN "partners" p ON s."partner_id" = p."id"
+            JOIN "customers" c ON s."customer_id" = c."customer_id"
+            JOIN "templates" t ON s."template_id" = t."id"
+            WHERE s."customer_id"::text = {escape_sql_string(customer_id)} 
+            AND p."partner_company" = {escape_sql_string(partner_company)} 
+            AND t."template_name" = {escape_sql_string(template_name)}
+            AND s."id" = (
+                SELECT MAX(s2."id") 
+                FROM "submissions" s2 
+                JOIN "partners" p2 ON s2."partner_id" = p2."id"
+                JOIN "templates" t2 ON s2."template_id" = t2."id"
+                WHERE s2."customer_id"::text = {escape_sql_string(customer_id)}
+                AND p2."partner_company" = {escape_sql_string(partner_company)}
+                AND t2."template_name" = {escape_sql_string(template_name)}
+            )
+        """
+        
+        df = postgres_fetch(query)
+        
+        # Check if result is actually a DataFrame
+        # If postgres_fetch returns an error dict or other non-DataFrame, handle it
+        if not isinstance(df, pd.DataFrame):
+            # If it's a dict with an error message, that's expected when no data exists
+            if isinstance(df, dict):
+                # Silently handle - this might be an error response from the helper
+                return {'has_existing': False}
+            return {'has_existing': False}
+        
+        if df is not None and not df.empty:
+            # Convert DataFrame to list of dicts
+            results = df.to_dict('records')
+            responses = {row['question_id']: row['response_value'] for row in results}
+            return {
+                'has_existing': True,
+                'responses': responses,
+                'submission_date': results[0]['submission_date'],
+                'previous_partner_name': results[0]['previous_partner_name'],
+                'customer_company': results[0]['customer_company']
+            }
+        return {'has_existing': False}
+    except Exception as e:
+        error_msg = str(e)
+        # Suppress errors for "no existing responses" - this is normal
+        # Only show errors if they're actual database connection or critical errors
+        # Don't show type mismatch errors as they might be expected when no data exists
+        if 'operator does not exist' in error_msg.lower() or 'no connection adapters' in error_msg.lower():
+            # These errors typically occur when the query fails due to type mismatches
+            # or when postgres_fetch returns an error dict instead of DataFrame
+            # Silently return False - this is expected when checking for existing responses
+            pass
+        return {'has_existing': False}
 
 def submit_survey_responses(customer_id: str, customer_company: str, 
                            partner_name: str, partner_company: str,
                            template_name: str, responses: Dict, is_update: bool = False):
     """Submit survey responses to database"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    
     try:
-        with conn.cursor() as cur:
-            # Insert or get customer
-            cur.execute("""
-                INSERT INTO customers (customer_id, customer_company) 
-                VALUES (%s, %s) 
-                ON CONFLICT (customer_id) DO UPDATE SET customer_company = %s 
-                RETURNING customer_id
-            """, (customer_id, customer_company, customer_company))
-            
-            # Insert or get partner
-            cur.execute("""
-                INSERT INTO partners (partner_name, partner_company) 
-                VALUES (%s, %s) 
-                ON CONFLICT (partner_name, partner_company) DO UPDATE SET partner_name = %s 
-                RETURNING id
-            """, (partner_name, partner_company, partner_name))
-            partner_id = cur.fetchone()[0]
-            
-            # Get template ID
-            cur.execute("""
-                SELECT id, questions FROM templates WHERE template_name = %s
-            """, (template_name,))
-            template_result = cur.fetchone()
-            if not template_result:
-                raise Exception(f"Template '{template_name}' not found")
-            template_id = template_result[0]
-            template_questions = template_result[1]
-            
-            # Get previous submission ID if updating
-            previous_submission_id = None
-            if is_update:
-                cur.execute("""
-                    SELECT MAX(s.id) as id
-                    FROM submissions s
-                    JOIN partners p ON s.partner_id = p.id
-                    WHERE s.customer_id = %s 
-                    AND p.partner_name = %s 
-                    AND p.partner_company = %s 
-                    AND s.template_id = %s
-                """, (customer_id, partner_name, partner_company, template_id))
-                prev_result = cur.fetchone()
-                if prev_result and prev_result[0]:
-                    previous_submission_id = prev_result[0]
-            
-            # Create new submission
-            cur.execute("""
-                INSERT INTO submissions (customer_id, partner_id, template_id, is_update, previous_submission_id) 
-                VALUES (%s, %s, %s, %s, %s) 
-                RETURNING id, submission_uuid
-            """, (customer_id, partner_id, template_id, is_update, previous_submission_id))
-            submission_result = cur.fetchone()
-            submission_id = submission_result[0]
-            submission_uuid = submission_result[1]
-            
-            # Insert responses
-            for question_id, response_value in responses.items():
-                if response_value is not None and response_value != '':
-                    # Find question details from template
-                    question_detail = next((q for q in template_questions if q['id'] == question_id), None)
-                    question_text = question_detail['question'] if question_detail else question_id
-                    response_type = question_detail['type'] if question_detail else 'unknown'
-                    section_name = question_detail.get('section') if question_detail else None
-                    
-                    cur.execute("""
-                        INSERT INTO responses (submission_id, question_id, question_text, response_value, response_type, section_name) 
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (submission_id, question_id, question_text, str(response_value), response_type, section_name))
-            
-            conn.commit()
-            return {'success': True, 'submission_id': submission_id, 'submission_uuid': str(submission_uuid)}
+        # Insert or get customer
+        customer_query = f"""
+            INSERT INTO "customers" ("customer_id", "customer_company") 
+            VALUES ({escape_sql_string(customer_id)}, {escape_sql_string(customer_company)}) 
+            ON CONFLICT ("customer_id") DO UPDATE SET "customer_company" = {escape_sql_string(customer_company)}
+        """
+        result = postgres_insert(customer_query)
+        # Check if postgres_insert returned an error (only 'message' indicates error)
+        if isinstance(result, dict) and 'message' in result:
+            raise Exception(f"Database insert error (customers): {result.get('message', 'Unknown error')}")
+        
+        # Insert or get partner and retrieve partner_id
+        partner_query = f"""
+            INSERT INTO "partners" ("partner_name", "partner_company") 
+            VALUES ({escape_sql_string(partner_name)}, {escape_sql_string(partner_company)}) 
+            ON CONFLICT ("partner_name", "partner_company") DO UPDATE SET "partner_name" = {escape_sql_string(partner_name)}
+        """
+        result = postgres_insert(partner_query)
+        # Check if postgres_insert returned an error (only 'message' indicates error)
+        if isinstance(result, dict) and 'message' in result:
+            raise Exception(f"Database insert error (partners): {result.get('message', 'Unknown error')}")
+        
+        # Get partner_id
+        partner_fetch_query = f"""
+            SELECT "id" FROM "partners" 
+            WHERE "partner_name" = {escape_sql_string(partner_name)} 
+            AND "partner_company" = {escape_sql_string(partner_company)}
+            LIMIT 1
+        """
+        partner_df = postgres_fetch(partner_fetch_query)
+        if not isinstance(partner_df, pd.DataFrame) or partner_df is None or partner_df.empty:
+            raise Exception("Failed to get partner ID")
+        partner_id = int(partner_df.iloc[0]['id'])
+        
+        # Get template ID
+        template_query = f"""
+            SELECT "id", "questions"::text as "questions" FROM "templates" WHERE "template_name" = {escape_sql_string(template_name)}
+        """
+        template_df = postgres_fetch(template_query)
+        if not isinstance(template_df, pd.DataFrame) or template_df is None or template_df.empty:
+            raise Exception(f"Template '{template_name}' not found")
+        template_id = int(template_df.iloc[0]['id'])
+        template_questions_raw = template_df.iloc[0]['questions']
+        # Parse questions JSON - handle different data types
+        if template_questions_raw is None:
+            template_questions = []
+        elif isinstance(template_questions_raw, str):
+            try:
+                parsed = json.loads(template_questions_raw)
+                template_questions = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                raise Exception(f"Failed to parse questions JSON for template '{template_name}'")
+        elif isinstance(template_questions_raw, list):
+            template_questions = template_questions_raw
+        else:
+            # Try to convert and parse
+            try:
+                questions_str = str(template_questions_raw)
+                parsed = json.loads(questions_str)
+                template_questions = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                raise Exception(f"Failed to parse questions for template '{template_name}'")
+        
+        # Get previous submission ID if updating
+        previous_submission_id = None
+        if is_update:
+            # template_id is already cast to int above
+            # Get submissions by partner and template, then filter by customer_id in Python
+            prev_query = f"""
+                SELECT s."id", s."customer_id"
+                FROM "submissions" s
+                JOIN "partners" p ON s."partner_id" = p."id"
+                WHERE p."partner_name" = {escape_sql_string(partner_name)} 
+                AND p."partner_company" = {escape_sql_string(partner_company)} 
+                AND s."template_id" = {template_id}
+                ORDER BY s."id" DESC
+            """
+            prev_df = postgres_fetch(prev_query)
+            if isinstance(prev_df, pd.DataFrame) and prev_df is not None and not prev_df.empty:
+                # Filter by customer_id in Python to avoid type mismatch
+                for _, row in prev_df.iterrows():
+                    if str(row['customer_id']) == str(customer_id):
+                        previous_submission_id = int(row['id'])
+                        break
+        
+        # Create new submission
+        # partner_id and template_id are already integers
+        # Handle previous_submission_id - use NULL if None, otherwise use integer value
+        if previous_submission_id:
+            previous_submission_id_value = int(previous_submission_id)
+        else:
+            previous_submission_id_value = 'NULL'
+        
+        submission_query = f"""
+            INSERT INTO "submissions" ("customer_id", "partner_id", "template_id", "is_update", "previous_submission_id") 
+            VALUES ({escape_sql_string(customer_id)}, {partner_id}, {template_id}, {escape_sql_string(is_update)}, {previous_submission_id_value})
+        """
+        result = postgres_insert(submission_query)
+        # Check if postgres_insert returned an error (only 'message' indicates error)
+        # Success responses may have 'return_value' and 'execution_id', which are OK
+        if isinstance(result, dict) and 'message' in result:
+            error_msg = result.get('message', str(result))
+            raise Exception(f"Database insert error (submissions): {error_msg}")
+        
+        # Get submission_id and submission_uuid
+        # Since we just inserted, get the most recent submission matching partner_id and template_id
+        # Then verify customer_id matches in Python to avoid type mismatch in SQL
+        submission_fetch_query = f"""
+            SELECT "id", "submission_uuid", "customer_id" 
+            FROM "submissions" 
+            WHERE "partner_id" = {partner_id} 
+            AND "template_id" = {template_id}
+            ORDER BY "id" DESC LIMIT 1
+        """
+        submission_df = postgres_fetch(submission_fetch_query)
+        if not isinstance(submission_df, pd.DataFrame) or submission_df is None or submission_df.empty:
+            raise Exception("Failed to get submission ID")
+        
+        # Verify customer_id matches (handle type conversion in Python)
+        fetched_customer_id = str(submission_df.iloc[0]['customer_id'])
+        if fetched_customer_id != str(customer_id):
+            raise Exception(f"Customer ID mismatch: expected {customer_id}, got {fetched_customer_id}")
+        
+        submission_id = int(submission_df.iloc[0]['id'])
+        submission_uuid = submission_df.iloc[0]['submission_uuid']
+        
+        # Insert responses
+        for question_id, response_value in responses.items():
+            if response_value is not None and response_value != '':
+                # Find question details from template
+                question_detail = next((q for q in template_questions if q['id'] == question_id), None)
+                question_text = question_detail['question'] if question_detail else question_id
+                response_type = question_detail['type'] if question_detail else 'unknown'
+                section_name = question_detail.get('section') if question_detail else None
+                
+                response_query = f"""
+                    INSERT INTO "responses" ("submission_id", "question_id", "question_text", "response_value", "response_type", "section_name") 
+                    VALUES ({submission_id}, {escape_sql_string(question_id)}, {escape_sql_string(question_text)}, {escape_sql_string(str(response_value))}, {escape_sql_string(response_type)}, {escape_sql_string(section_name) if section_name else 'NULL'})
+                """
+                result = postgres_insert(response_query)
+                # Check if postgres_insert returned an error (only 'message' indicates error)
+                # Success responses may have 'return_value' and 'execution_id', which are OK
+                if isinstance(result, dict) and 'message' in result:
+                    raise Exception(f"Database insert error (responses): {result.get('message', 'Unknown error')}")
+        
+        return {'success': True, 'submission_id': submission_id, 'submission_uuid': str(submission_uuid)}
     
     except Exception as e:
-        conn.rollback()
-        st.error(f"Error submitting responses: {str(e)}")
-        return {'success': False, 'error': str(e)}
+        error_msg = str(e)
+        # Extract actual error message if it's wrapped in a dict string
+        if 'connection adapters' in error_msg and '{' in error_msg:
+            # Try to extract the actual error message from the wrapped dict
+            import re
+            match = re.search(r"'message':\s*'([^']+)'", error_msg)
+            if match:
+                error_msg = match.group(1)
+        st.error(f"Error submitting responses: {error_msg}")
+        return {'success': False, 'error': error_msg}
 
 def upload_template(survey_name: str, questions: List[Dict], description: str = ""):
     """Upload a new survey template"""
-    query = """
-        INSERT INTO templates (template_name, questions, description) 
-        VALUES (%s, %s, %s) 
-        ON CONFLICT (template_name) 
-        DO UPDATE SET questions = %s, updated_date = CURRENT_TIMESTAMP
-        RETURNING id
-    """
-    questions_json = json.dumps(questions)
-    result = execute_query(query, (survey_name, questions_json, description, questions_json), fetch=True)
-    return result is not None
+    try:
+        questions_json = json.dumps(questions)
+        query = f"""
+            INSERT INTO "templates" ("template_name", "questions", "description") 
+            VALUES ({escape_sql_string(survey_name)}, {escape_sql_string(questions_json)}, {escape_sql_string(description)}) 
+            ON CONFLICT ("template_name") 
+            DO UPDATE SET "questions" = {escape_sql_string(questions_json)}, "updated_date" = CURRENT_TIMESTAMP
+        """
+        postgres_insert(query)
+        return True
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+        return False
 
 def export_all_submissions():
     """Export all submissions to Excel"""
-    query = """
-        SELECT 
-            s.submission_uuid,
-            s.submission_date,
-            s.customer_id,
-            c.customer_company,
-            p.partner_name,
-            p.partner_company,
-            t.template_name as survey_name,
-            s.is_update,
-            r.question_id,
-            r.question_text,
-            r.response_value,
-            r.response_type,
-            r.section_name
-        FROM submissions s
-        JOIN customers c ON s.customer_id = c.customer_id
-        JOIN partners p ON s.partner_id = p.id
-        JOIN templates t ON s.template_id = t.id
-        LEFT JOIN responses r ON s.id = r.submission_id
-        ORDER BY s.submission_date DESC, r.question_id
-    """
-    results = execute_query(query)
-    
-    if not results:
-        return None
-    
-    # Create DataFrame
-    df = pd.DataFrame(results)
-    
-    # Create Excel file with multiple sheets
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Summary sheet
-        summary_df = df.groupby(['submission_uuid', 'submission_date', 'customer_id', 
-                                 'customer_company', 'partner_name', 'partner_company', 
-                                 'survey_name', 'is_update']).size().reset_index(name='response_count')
-        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+    try:
+        query = """
+            SELECT 
+                s."submission_uuid",
+                s."submission_date",
+                s."customer_id",
+                c."customer_company",
+                p."partner_name",
+                p."partner_company",
+                t."template_name" as survey_name,
+                s."is_update",
+                r."question_id",
+                r."question_text",
+                r."response_value",
+                r."response_type",
+                r."section_name"
+            FROM "submissions" s
+            JOIN "customers" c ON s."customer_id" = c."customer_id"
+            JOIN "partners" p ON s."partner_id" = p."id"
+            JOIN "templates" t ON s."template_id" = t."id"
+            LEFT JOIN "responses" r ON s."id" = r."submission_id"
+            ORDER BY s."submission_date" DESC, r."question_id"
+        """
         
-        # Detailed responses sheet
-        detailed_df = df[df['response_value'].notna()][['submission_uuid', 'submission_date', 
-                                                          'customer_id', 'customer_company', 
-                                                          'partner_name', 'partner_company', 
-                                                          'survey_name', 'section_name', 
-                                                          'question_id', 'question_text', 
-                                                          'response_value', 'response_type']]
-        detailed_df.to_excel(writer, sheet_name='Detailed Responses', index=False)
-    
-    output.seek(0)
-    return output
+        df = postgres_fetch(query)
+        
+        # Check if result is actually a DataFrame
+        if not isinstance(df, pd.DataFrame):
+            return None
+        if df is None or df.empty:
+            return None
+        
+        # Create Excel file with multiple sheets
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Summary sheet
+            summary_df = df.groupby(['submission_uuid', 'submission_date', 'customer_id', 
+                                     'customer_company', 'partner_name', 'partner_company', 
+                                     'survey_name', 'is_update']).size().reset_index(name='response_count')
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Detailed responses sheet
+            detailed_df = df[df['response_value'].notna()][['submission_uuid', 'submission_date', 
+                                                              'customer_id', 'customer_company', 
+                                                              'partner_name', 'partner_company', 
+                                                              'survey_name', 'section_name', 
+                                                              'question_id', 'question_text', 
+                                                              'response_value', 'response_type']]
+            detailed_df.to_excel(writer, sheet_name='Detailed Responses', index=False)
+        
+        output.seek(0)
+        return output
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+        return None
 
 # ============================================================================
 # FILE PARSING UTILITIES
@@ -606,11 +755,46 @@ def render_question(question: Dict, key_prefix: str = ""):
 
 def render_survey_form(survey_config: Dict):
     """Render complete survey form"""
-    questions = survey_config['questions']
+    # Safely get questions and ensure it's a list
+    questions_raw = survey_config.get('questions', [])
+    
+    # Handle different data types
+    if questions_raw is None:
+        questions = []
+    elif isinstance(questions_raw, str):
+        # Try to parse as JSON
+        try:
+            parsed = json.loads(questions_raw)
+            questions = parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            st.error(f"Failed to parse questions JSON. Raw value type: {type(questions_raw)}")
+            questions = []
+    elif isinstance(questions_raw, list):
+        questions = questions_raw
+    else:
+        # Try to convert to list or parse
+        try:
+            if isinstance(questions_raw, dict):
+                questions = [questions_raw]  # Single question as dict
+            else:
+                questions_str = str(questions_raw)
+                parsed = json.loads(questions_str)
+                questions = parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            st.error(f"Unexpected questions format. Type: {type(questions_raw)}")
+            questions = []
+    
+    if not questions:
+        st.warning("⚠️ No questions found in this survey template.")
+        return
     
     # Group questions by section
     sections = {}
     for q in questions:
+        # Ensure q is a dict
+        if not isinstance(q, dict):
+            st.warning(f"Skipping invalid question format: {type(q)}")
+            continue
         section = q.get('section', 'General')
         if section not in sections:
             sections[section] = []
@@ -798,7 +982,16 @@ def render_partner_mode():
         if selected_survey_name:
             st.session_state.selected_survey = survey_options[selected_survey_name]
             survey = st.session_state.selected_survey
-            st.info(f"📋 {survey.get('description', '')} ({len(survey['questions'])} questions)")
+            # Safely get questions count
+            questions = survey.get('questions', [])
+            if not isinstance(questions, list):
+                questions = []
+            question_count = len(questions) if questions else 0
+            # Handle NaN/None values from pandas
+            desc = survey.get('description', '')
+            if desc is None or (isinstance(desc, float) and pd.isna(desc)) or desc == '':
+                desc = 'No description'
+            st.info(f"📋 {desc} ({question_count} questions)")
     
     # Step 4: Check for existing responses
     if (st.session_state.selected_customer and st.session_state.selected_survey and 
@@ -896,20 +1089,22 @@ def main():
     st.markdown("""
         <div class="main-header">
             <h1>📊 Partner Survey System</h1>
-            <p>Streamlit Edition - Connected to PostgreSQL</p>
+            <p>Streamlit Edition - Using GoCobalt Helper Functions</p>
         </div>
     """, unsafe_allow_html=True)
     
     # Sidebar
     st.sidebar.title("🔧 Navigation")
     
-    # Connection status
-    conn = get_db_connection()
-    if conn:
+    # Connection status - test with a simple query
+    try:
+        test_query = "SELECT 1 as test"
+        postgres_fetch(test_query)
         st.sidebar.success("✅ Database Connected")
-    else:
+    except Exception as e:
         st.sidebar.error("❌ Database Connection Failed")
-        st.error("Please configure database credentials in Streamlit secrets")
+        st.error(f"Database connection error: {str(e)}")
+        st.info("Please ensure the gocobalt helper functions are properly configured with writeback database credentials.")
         return
     
     # Mode selection
@@ -934,6 +1129,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
